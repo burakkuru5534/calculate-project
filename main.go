@@ -4,21 +4,21 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/burakkuru5534/calculate-project/internal/handler"
+	"github.com/burakkuru5534/calculate-project/api"
+	"github.com/burakkuru5534/calculate-project/service"
 )
 
 func main() {
-	// handler oluştur
-	h := handler.NewHandler()
+	chipService := service.NewChipService()
+	handler := api.NewHandler(chipService)
 
-	// route bağla
-	http.HandleFunc("/calculate", h.Calculate)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
 
-	// server start
-	log.Println("Server starting on :8080")
+	addr := ":8080"
+	log.Printf("chip transfer service is running on %s", addr)
 
-	err := http.ListenAndServe(":8080", nil)
-	if err != nil {
-		log.Fatalf("server failed: %v", err)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		log.Fatalf("server stopped: %v", err)
 	}
 }
