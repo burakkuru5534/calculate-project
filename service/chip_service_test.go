@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -21,9 +22,15 @@ func TestGetBalance_DefaultValue(t *testing.T) {
 func TestTransfer_Success(t *testing.T) {
 	svc := NewChipService()
 
-	err := svc.Transfer("player-1", "player-2", 2_000)
+	result, err := svc.Transfer("tx-1", "player-1", "player-2", 2_000)
 	if err != nil {
 		t.Fatalf("Transfer returned error: %v", err)
+	}
+	if result.Status != TransferStatusSuccess {
+		t.Fatalf("expected transfer status success, got %s", result.Status)
+	}
+	if result.Replayed {
+		t.Fatalf("expected replayed=false, got true")
 	}
 
 	fromBalance, _ := svc.GetBalance("player-1")
@@ -40,7 +47,7 @@ func TestTransfer_Success(t *testing.T) {
 func TestTransfer_FailsWithInsufficientChips(t *testing.T) {
 	svc := NewChipService()
 
-	err := svc.Transfer("player-1", "player-2", 11_000)
+	_, err := svc.Transfer("tx-large", "player-1", "player-2", 11_000)
 	if err == nil {
 		t.Fatal("expected error for insufficient chips, got nil")
 	}
@@ -49,15 +56,15 @@ func TestTransfer_FailsWithInsufficientChips(t *testing.T) {
 	}
 
 	// This value is under max transfer and should fail specifically for insufficient balance.
-	err = svc.Transfer("player-1", "player-2", 4_000)
+	_, err = svc.Transfer("tx-2", "player-1", "player-2", 4_000)
 	if err != nil {
 		t.Fatalf("expected first transfer to succeed, got %v", err)
 	}
-	err = svc.Transfer("player-1", "player-2", 4_000)
+	_, err = svc.Transfer("tx-3", "player-1", "player-2", 4_000)
 	if err != nil {
 		t.Fatalf("expected second transfer to succeed, got %v", err)
 	}
-	err = svc.Transfer("player-1", "player-2", 4_000)
+	_, err = svc.Transfer("tx-4", "player-1", "player-2", 4_000)
 	if err != ErrInsufficientChips {
 		t.Fatalf("expected ErrInsufficientChips, got %v", err)
 	}
@@ -105,11 +112,55 @@ func TestTransfer_ValidationErrors(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := svc.Transfer(tc.fromID, tc.toID, tc.amount)
+			_, err := svc.Transfer("tx-"+tc.name, tc.fromID, tc.toID, tc.amount)
 			if err != tc.wantErr {
 				t.Fatalf("expected %v, got %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestTransfer_IdempotentReplayDoesNotDoubleDebit(t *testing.T) {
+	svc := NewChipService()
+	transferID := "tx-idempotent-1"
+
+	first, err := svc.Transfer(transferID, "player-1", "player-2", 2_000)
+	if err != nil {
+		t.Fatalf("expected first transfer success, got %v", err)
+	}
+	if first.Replayed {
+		t.Fatal("expected first transfer replayed=false")
+	}
+
+	second, err := svc.Transfer(transferID, "player-1", "player-2", 2_000)
+	if err != nil {
+		t.Fatalf("expected idempotent replay success, got %v", err)
+	}
+	if !second.Replayed {
+		t.Fatal("expected replayed=true for duplicate transfer id")
+	}
+	if second.Status != TransferStatusSuccess {
+		t.Fatalf("expected replay status success, got %s", second.Status)
+	}
+
+	fromBalance, _ := svc.GetBalance("player-1")
+	toBalance, _ := svc.GetBalance("player-2")
+	if fromBalance != 8_000 {
+		t.Fatalf("expected sender to be debited once (8000), got %d", fromBalance)
+	}
+	if toBalance != 12_000 {
+		t.Fatalf("expected receiver to be credited once (12000), got %d", toBalance)
+	}
+}
+
+func TestTransfer_SameIDWithDifferentPayloadFails(t *testing.T) {
+	svc := NewChipService()
+
+	if _, err := svc.Transfer("tx-same-id", "player-1", "player-2", 1_000); err != nil {
+		t.Fatalf("expected first transfer success, got %v", err)
+	}
+	if _, err := svc.Transfer("tx-same-id", "player-1", "player-2", 2_000); err != ErrTransferIDConflict {
+		t.Fatalf("expected ErrTransferIDConflict, got %v", err)
 	}
 }
 
@@ -123,13 +174,14 @@ func TestTransfer_ConcurrentSafety(t *testing.T) {
 
 	// Run transfers both ways to stress concurrent updates and preserve totals.
 	for i := 0; i < goroutines; i++ {
+		i := i
 		go func() {
 			defer wg.Done()
-			_ = svc.Transfer("player-a", "player-b", transferAmount)
+			_, _ = svc.Transfer(fmt.Sprintf("tx-ab-%d", i), "player-a", "player-b", transferAmount)
 		}()
 		go func() {
 			defer wg.Done()
-			_ = svc.Transfer("player-b", "player-a", transferAmount)
+			_, _ = svc.Transfer(fmt.Sprintf("tx-ba-%d", i), "player-b", "player-a", transferAmount)
 		}()
 	}
 

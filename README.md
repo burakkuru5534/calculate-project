@@ -5,6 +5,8 @@ This is a minimal in-memory peer-to-peer chip transfer backend with:
 - API layer (`api`)
 - Service layer (`service`)
 - Concurrency-safe, atomic transfers
+- Idempotent transfers via `transferId`
+- Transfer status tracking (`pending`, `success`, `fail`)
 
 ## Project Structure
 
@@ -37,7 +39,7 @@ Server starts on `:8080`.
 ```bash
 curl -X POST http://localhost:8080/transfer-chips \
   -H "Content-Type: application/json" \
-  -d '{"fromPlayerId":"player-123","toPlayerId":"player-456","amount":2000}'
+  -d '{"transferId":"tx-1001","fromPlayerId":"player-123","toPlayerId":"player-456","amount":2000}'
 ```
 
 ### Get Balance
@@ -61,13 +63,18 @@ go test ./exercise/chip-transfer/...
 3. Add a service-level mutex to protect all reads/writes.
 4. Lazily initialize each unseen player with `10,000` chips.
 5. Implement transfer validation:
-    - sender and receiver IDs must be present
-    - no self-transfer
-    - amount must be `> 0` and `<= 5,000`
-    - sender must have enough chips
+   - `transferId` is required
+   - sender and receiver IDs must be present
+   - no self-transfer
+   - amount must be `> 0` and `<= 5,000`
+   - sender must have enough chips
 6. Make transfer atomic by running debit and credit in one lock scope.
-7. Build HTTP handlers:
-    - `POST /transfer-chips`
-    - `GET /chip-balance/{playerId}`
-8. Return clear JSON errors with suitable status codes.
-9. Add unit tests for rules and a concurrency test for race-safe totals.
+7. Add an in-memory transfer ledger keyed by `transferId` for idempotency.
+8. For repeated `transferId`:
+   - same payload returns previous result without new debit
+   - different payload returns conflict error
+9. Build HTTP handlers:
+   - `POST /transfer-chips`
+   - `GET /chip-balance/{playerId}`
+10. Return clear JSON errors with suitable status codes.
+11. Add unit tests for rules, idempotent replay, and concurrency safety.

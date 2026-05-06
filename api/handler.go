@@ -20,14 +20,17 @@ func NewHandler(chipService *service.ChipService) *Handler {
 }
 
 type transferRequest struct {
+	TransferID   string `json:"transferId"`
 	FromPlayerID string `json:"fromPlayerId"`
 	ToPlayerID   string `json:"toPlayerId"`
 	Amount       int64  `json:"amount"`
 }
 
 type transferResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
+	TransferID string                 `json:"transferId"`
+	Success    bool                   `json:"success"`
+	Status     service.TransferStatus `json:"status"`
+	Message    string                 `json:"message"`
 }
 
 type balanceResponse struct {
@@ -58,14 +61,19 @@ func (h *Handler) handleTransferChips(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.chipService.Transfer(req.FromPlayerID, req.ToPlayerID, req.Amount)
+	result, err := h.chipService.Transfer(req.TransferID, req.FromPlayerID, req.ToPlayerID, req.Amount)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrSelfTransfer),
 			errors.Is(err, service.ErrTransferTooLarge),
 			errors.Is(err, service.ErrInvalidAmount),
-			errors.Is(err, service.ErrPlayerIDRequired):
+			errors.Is(err, service.ErrPlayerIDRequired),
+			errors.Is(err, service.ErrTransferIDRequired):
 			writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, service.ErrTransferIDConflict):
+			writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, service.ErrTransferInProgress):
+			writeError(w, http.StatusAccepted, err.Error())
 		case errors.Is(err, service.ErrInsufficientChips):
 			writeError(w, http.StatusConflict, err.Error())
 		default:
@@ -74,9 +82,16 @@ func (h *Handler) handleTransferChips(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	message := "Transfer completed successfully"
+	if result.Replayed {
+		message = "Transfer already processed successfully"
+	}
+
 	writeJSON(w, http.StatusOK, transferResponse{
-		Success: true,
-		Message: "Transfer completed successfully",
+		TransferID: result.TransferID,
+		Success:    true,
+		Status:     result.Status,
+		Message:    message,
 	})
 }
 
@@ -87,6 +102,10 @@ func (h *Handler) handleChipBalance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	playerID := strings.TrimPrefix(r.URL.Path, "/chip-balance/")
+	if playerID == "" {
+		writeError(w, http.StatusBadRequest, service.ErrPlayerIDRequired.Error())
+		return
+	}
 
 	balance, err := h.chipService.GetBalance(playerID)
 	if err != nil {
