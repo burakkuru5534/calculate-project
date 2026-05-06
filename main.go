@@ -5,15 +5,20 @@ import (
 	"net/http"
 
 	"github.com/burakkuru5534/calculate-project/internal/handler"
-	"github.com/burakkuru5534/calculate-project/internal/service"
 )
 
 func main() {
-	svc := &service.CalculatorService{}
-	h := handler.NewHandler(svc)
+	// handler oluştur
+	h := handler.NewHandler()
 
+	// route bağla
 	http.HandleFunc("/calculate", h.Calculate)
 
-	log.Println("Server running on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	// server start
+	log.Println("Server starting on :8080")
+
+	err := http.ListenAndServe(":8080", nil)
+	if err != nil {
+		log.Fatalf("server failed: %v", err)
+	}
 }
