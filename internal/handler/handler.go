@@ -17,11 +17,12 @@ type Response struct {
 }
 
 // Handler struct (dependency injection için)
-type Handler struct{}
+type Handler struct {
+	calc service.Calculator
+}
 
-// Constructor (ileride dependency eklemek için hazır)
-func NewHandler() *Handler {
-	return &Handler{}
+func NewHandler(calc service.Calculator) *Handler {
+	return &Handler{calc: calc}
 }
 
 func (h *Handler) Calculate(w http.ResponseWriter, r *http.Request) {
